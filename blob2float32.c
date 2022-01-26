@@ -21,7 +21,7 @@
 ** Otherwise tointeger(X) return NULL.
 **
 ** If X is an 4-byte BLOB then that blob is interpreted as
-** a 32-bit IEEE big-endian floating point value
+** a 32-bit IEEE754 little-endian floating point value
 ** and tofloat32(X) returns the corresponding real value.
 ** If X is an integer, real, or string value, the function retains
 ** the behavior of toreal() from the totype extension.
@@ -448,7 +448,7 @@ static void tofloat32Func(
         int nBlob = sqlite3_value_bytes(argv[0]);
         if( nBlob==sizeof(float) ){
           float rVal;
-          if( TOTYPE_LITTLEENDIAN ){
+          if( TOTYPE_BIGENDIAN ){
             int i;
             unsigned char zBlobRev[sizeof(float)];
             for(i=0; i<sizeof(float); i++){
