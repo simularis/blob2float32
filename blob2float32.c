@@ -10,7 +10,7 @@
 **
 ******************************************************************************
 **
-** This SQLite extension implements functions tointeger(X) and toreal(X).
+** This SQLite extension implements function tofloat32(X).
 **
 ** If X is an integer, real, or string value that can be
 ** losslessly represented as an integer, then tointeger(X)
@@ -20,16 +20,13 @@
 ** and tointeger(X) returns the corresponding integer value.
 ** Otherwise tointeger(X) return NULL.
 **
-** If X is an integer, real, or string value that can be
-** convert into a real number, preserving at least 15 digits
-** of precision, then toreal(X) returns the corresponding real value.
-** If X is an 8-byte BLOB then that blob is interpreted as
-** a 64-bit IEEE754 big-endian floating point value
-** and toreal(X) returns the corresponding real value.
-** Otherwise toreal(X) return NULL.
+** If X is an 4-byte BLOB then that blob is interpreted as
+** a 32-bit IEEE big-endian floating point value
+** and tofloat32(X) returns the corresponding real value.
+** If X is an integer, real, or string value, the function retains
+** the behavior of toreal() from the totype extension.
 **
-** Note that tointeger(X) of an 8-byte BLOB assumes a little-endian
-** encoding whereas toreal(X) of an 8-byte BLOB assumes a big-endian
+** Note that tofloat32(X) of an 8-byte BLOB assumes a big-endian
 ** encoding.
 */
 #include "sqlite3ext.h"
@@ -425,7 +422,7 @@ static void tointegerFunc(
 #pragma warning(disable: 4748)
 #pragma optimize("", off)
 #endif
-static void torealFunc(
+static void tofloat32Func(
   sqlite3_context *context,
   int argc,
   sqlite3_value **argv
@@ -449,19 +446,19 @@ static void torealFunc(
       const unsigned char *zBlob = sqlite3_value_blob(argv[0]);
       if( zBlob ){
         int nBlob = sqlite3_value_bytes(argv[0]);
-        if( nBlob==sizeof(double) ){
-          double rVal;
+        if( nBlob==sizeof(float) ){
+          float rVal;
           if( TOTYPE_LITTLEENDIAN ){
             int i;
-            unsigned char zBlobRev[sizeof(double)];
-            for(i=0; i<sizeof(double); i++){
-              zBlobRev[i] = zBlob[sizeof(double)-1-i];
+            unsigned char zBlobRev[sizeof(float)];
+            for(i=0; i<sizeof(float); i++){
+              zBlobRev[i] = zBlob[sizeof(float)-1-i];
             }
-            memcpy(&rVal, zBlobRev, sizeof(double));
+            memcpy(&rVal, zBlobRev, sizeof(float));
           }else{
-            memcpy(&rVal, zBlob, sizeof(double));
+            memcpy(&rVal, zBlob, sizeof(float));
           }
-          sqlite3_result_double(context, rVal);
+          sqlite3_result_double(context, (double)rVal);
         }
       }
       break;
@@ -502,13 +499,8 @@ int sqlite3_totype_init(
   int rc = SQLITE_OK;
   SQLITE_EXTENSION_INIT2(pApi);
   (void)pzErrMsg;  /* Unused parameter */
-  rc = sqlite3_create_function(db, "tointeger", 1,
-        SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_INNOCUOUS, 0,
-        tointegerFunc, 0, 0);
-  if( rc==SQLITE_OK ){
-    rc = sqlite3_create_function(db, "toreal", 1,
-        SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_INNOCUOUS, 0,
-        torealFunc, 0, 0);
-  }
+  rc = sqlite3_create_function(db, "tofloat32", 1,
+      SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_INNOCUOUS, 0,
+      tofloat32Func, 0, 0);
   return rc;
 }
