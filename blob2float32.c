@@ -373,7 +373,12 @@ static void tointegerFunc(
       break;
     }
     case SQLITE_BLOB: {
+      #ifdef __cplusplus
+      const unsigned char *zBlob = static_cast<const unsigned char *>(sqlite3_value_blob(argv[0]));
+      #else
       const unsigned char *zBlob = sqlite3_value_blob(argv[0]);
+      #endif
+      
       if( zBlob ){
         int nBlob = sqlite3_value_bytes(argv[0]);
         if( nBlob==sizeof(sqlite3_int64) ){
@@ -443,7 +448,12 @@ static void tofloat32Func(
       break;
     }
     case SQLITE_BLOB: {
+      #ifdef __cplusplus
+      const unsigned char *zBlob = static_cast<const unsigned char *>(sqlite3_value_blob(argv[0]));
+      #else
       const unsigned char *zBlob = sqlite3_value_blob(argv[0]);
+      #endif
+
       if( zBlob ){
         int nBlob = sqlite3_value_bytes(argv[0]);
         if( nBlob==sizeof(float) ){
@@ -488,6 +498,9 @@ static void tofloat32Func(
 #pragma warning(default: 4748)
 #endif
 
+#ifdef __cplusplus
+extern "C"
+#endif
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
