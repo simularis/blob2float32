@@ -492,6 +492,7 @@ static int jsonEachColumn(
   int i                       /* Which column to return */
 ){
   JsonEachCursor *p = (JsonEachCursor*)cur;
+  assert(p->iRowid < p->iEnd);
   switch( i ){
     case JEACH_KEY: {
       sqlite3_result_int64(ctx, (sqlite3_int64)p->iRowid);
