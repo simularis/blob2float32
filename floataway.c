@@ -382,6 +382,16 @@ static void float32NullFunc(
 /****************************************************************************
 ** The json_each virtual table
 ****************************************************************************/
+
+/* An instance of the CSV virtual table */
+typedef struct CsvTable {
+  sqlite3_vtab base;              /* Base class.  Must be first */
+  char *zData;                    /* Raw CSV data in lieu of zFilename */
+  long iStart;                    /* Offset to start of data in zFilename */
+  int nCol;                       /* Number of columns in the CSV file */
+  unsigned int tstFlags;          /* Bit values used for testing */
+} CsvTable;
+
 typedef struct JsonEachCursor JsonEachCursor;
 struct JsonEachCursor {
   sqlite3_vtab_cursor base;  /* Base class - must be first */
@@ -399,7 +409,7 @@ static int jsonEachConnect(
   sqlite3_vtab **ppVtab,
   char **pzErr
 ){
-  sqlite3_vtab *pNew;
+  CsvTable *pNew = NULL;        /* The CsvTable object to construct */
   int rc;
 
 /* Column numbers */
@@ -411,16 +421,38 @@ static int jsonEachConnect(
 #define JEACH_JSON    2
 
   UNUSED_PARAM(pzErr);
-  UNUSED_PARAM(argv);
-  UNUSED_PARAM(argc);
   UNUSED_PARAM(pAux);
+
+  /* Copy the args into memory.
+  ** First determine the length of strings.
+  ** Add a newline separator after each arg, and a null terminator byte.
+  */
+  int arg_length_sum = 0;
+  for (int i = 0; i < argc; i++) {
+    arg_length_sum += strlen(argv[i]) + 1;
+  }
+  arg_length_sum += 1;
+  char * arg_summary = sqlite3_malloc(arg_length_sum * sizeof(char));
+  if( arg_summary==0 ) return SQLITE_NOMEM;
+  memset(arg_summary, 0, (size_t)arg_length_sum);
+  int j = 0;
+  for (int i = 0; i < argc; i++) {
+    strcat(arg_summary,argv[i]);
+    strcat(arg_summary,"\n");
+  }
+
   rc = sqlite3_declare_vtab(db, 
      "CREATE TABLE x(key,value,"
                     "json HIDDEN)");
   if( rc==SQLITE_OK ){
-    pNew = *ppVtab = sqlite3_malloc( sizeof(*pNew) );
-    if( pNew==0 ) return SQLITE_NOMEM;
+    pNew = sqlite3_malloc( sizeof(*pNew) );
+    *ppVtab = (sqlite3_vtab*)pNew;
+    if( pNew==0 ) {
+      sqlite3_free(arg_summary);
+      return SQLITE_NOMEM;
+    }
     memset(pNew, 0, sizeof(*pNew));
+    pNew->zData = arg_summary;
     sqlite3_vtab_config(db, SQLITE_VTAB_INNOCUOUS);
   }
   return rc;
@@ -428,9 +460,26 @@ static int jsonEachConnect(
 
 /* destructor for json_each virtual table */
 static int jsonEachDisconnect(sqlite3_vtab *pVtab){
-  sqlite3_free(pVtab);
+  CsvTable *p = (CsvTable*)pVtab;
+  sqlite3_free(p->zData);
+  sqlite3_free(p);
   return SQLITE_OK;
 }
+
+/*
+** The xConnect and xCreate methods do the same thing, but they must be
+** different so that the virtual table is not an eponymous virtual table.
+*/
+static int jsonEachCreate(
+  sqlite3 *db,
+  void *pAux,
+  int argc, const char *const*argv,
+  sqlite3_vtab **ppVtab,
+  char **pzErr
+){
+ return jsonEachConnect(db, pAux, argc, argv, ppVtab, pzErr);
+}
+
 
 /* constructor for a JsonEachCursor object for json_each(). */
 static int jsonEachOpenEach(sqlite3_vtab *p, sqlite3_vtab_cursor **ppCursor){
@@ -505,7 +554,9 @@ static int jsonEachColumn(
     case JEACH_JSON: {
       assert( i==JEACH_JSON );
       //sqlite3_result_text(ctx, p->sParse.zJson, -1, SQLITE_STATIC);
-      sqlite3_result_blob(ctx, p->zJson, p->iNbytes, SQLITE_TRANSIENT);
+      //sqlite3_result_blob(ctx, p->zJson, p->iNbytes, SQLITE_TRANSIENT);
+      CsvTable *pTab = (CsvTable*)cur->pVtab;
+      sqlite3_result_text(ctx, pTab->zData, -1, SQLITE_TRANSIENT);
       break;
     }
   }
@@ -615,11 +666,11 @@ static int jsonEachFilter(
 /* The methods of the json_each virtual table */
 static sqlite3_module jsonEachModule = {
   0,                         /* iVersion */
-  0,                         /* xCreate */
+  jsonEachCreate,                         /* xCreate */
   jsonEachConnect,           /* xConnect */
   jsonEachBestIndex,         /* xBestIndex */
   jsonEachDisconnect,        /* xDisconnect */
-  0,                         /* xDestroy */
+  jsonEachDisconnect,        /* xDestroy */
   jsonEachOpenEach,          /* xOpen - open a cursor */
   jsonEachClose,             /* xClose - close a cursor */
   jsonEachFilter,            /* xFilter - configure scan constraints */
@@ -706,7 +757,7 @@ int sqlite3Json1Init(sqlite3 *db){
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-int sqlite3_floatarray_init(
+int sqlite3_floataway_init(
   sqlite3 *db, 
   char **pzErrMsg, 
   const sqlite3_api_routines *pApi
