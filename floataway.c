@@ -40,6 +40,10 @@ SQLITE_EXTENSION_INIT1
 #include <stdlib.h>
 #include <stdarg.h>
 #include <math.h>
+#ifdef __cplusplus
+#include <regex>
+#include <string>
+#endif
 
 /* Mark a function parameter as unused, to suppress nuisance compiler
 ** warnings. */
@@ -386,7 +390,6 @@ static void float32NullFunc(
 /* An instance of the CSV virtual table */
 typedef struct CsvTable {
   sqlite3_vtab base;              /* Base class.  Must be first */
-  char *zData;                    /* Raw CSV data in lieu of zFilename */
   long iStart;                    /* Offset to start of data in zFilename */
   int nCol;                       /* Number of columns in the CSV file */
   unsigned int tstFlags;          /* Bit values used for testing */
@@ -423,36 +426,37 @@ static int jsonEachConnect(
   UNUSED_PARAM(pzErr);
   UNUSED_PARAM(pAux);
 
-  /* Copy the args into memory.
-  ** First determine the length of strings.
-  ** Add a newline separator after each arg, and a null terminator byte.
+  /* Determine the parameter N.
+  ** Take the first user argument if it exists, e.g. argv[3].
+  ** Otherwise default to N = 1.
   */
-  int arg_length_sum = 0;
-  for (int i = 0; i < argc; i++) {
-    arg_length_sum += strlen(argv[i]) + 1;
-  }
-  arg_length_sum += 1;
-  char * arg_summary = sqlite3_malloc(arg_length_sum * sizeof(char));
-  if( arg_summary==0 ) return SQLITE_NOMEM;
-  memset(arg_summary, 0, (size_t)arg_length_sum);
-  int j = 0;
-  for (int i = 0; i < argc; i++) {
-    strcat(arg_summary,argv[i]);
-    strcat(arg_summary,"\n");
+  int nCol = 1;
+  if (argc > 3) {
+    std::string target(argv[3]);
+    // Pattern should match the number in 'N = 123' or simply '123'.
+    // Whitespace optional betweek each token.
+    std::regex rx(R"""((?:\s*N\s*=)?\s*(\d+)\s*)"""); // no double backslashes with raw string literal
+    std::smatch match;
+    if (regex_match(target.cbegin(), target.cend(), match, rx)) {
+      // Regex found
+      int nColFound = std::stoi(match.str(1));
+      if (nColFound >= 1) {
+        nCol = nColFound;
+      }
+    }
   }
 
   rc = sqlite3_declare_vtab(db, 
      "CREATE TABLE x(key,value,"
                     "json HIDDEN)");
   if( rc==SQLITE_OK ){
-    pNew = sqlite3_malloc( sizeof(*pNew) );
+    pNew = (CsvTable *)sqlite3_malloc( sizeof(*pNew) );
     *ppVtab = (sqlite3_vtab*)pNew;
     if( pNew==0 ) {
-      sqlite3_free(arg_summary);
       return SQLITE_NOMEM;
     }
     memset(pNew, 0, sizeof(*pNew));
-    pNew->zData = arg_summary;
+    pNew->nCol = nCol;
     sqlite3_vtab_config(db, SQLITE_VTAB_INNOCUOUS);
   }
   return rc;
@@ -461,7 +465,6 @@ static int jsonEachConnect(
 /* destructor for json_each virtual table */
 static int jsonEachDisconnect(sqlite3_vtab *pVtab){
   CsvTable *p = (CsvTable*)pVtab;
-  sqlite3_free(p->zData);
   sqlite3_free(p);
   return SQLITE_OK;
 }
@@ -486,7 +489,7 @@ static int jsonEachOpenEach(sqlite3_vtab *p, sqlite3_vtab_cursor **ppCursor){
   JsonEachCursor *pCur;
 
   UNUSED_PARAM(p);
-  pCur = sqlite3_malloc( sizeof(*pCur) );
+  pCur = (JsonEachCursor *)sqlite3_malloc( sizeof(*pCur) );
   if( pCur==0 ) return SQLITE_NOMEM;
   memset(pCur, 0, sizeof(*pCur));
   *ppCursor = &pCur->base;
@@ -556,7 +559,7 @@ static int jsonEachColumn(
       //sqlite3_result_text(ctx, p->sParse.zJson, -1, SQLITE_STATIC);
       //sqlite3_result_blob(ctx, p->zJson, p->iNbytes, SQLITE_TRANSIENT);
       CsvTable *pTab = (CsvTable*)cur->pVtab;
-      sqlite3_result_text(ctx, pTab->zData, -1, SQLITE_TRANSIENT);
+      sqlite3_result_int(ctx, pTab->nCol);
       break;
     }
   }
@@ -569,6 +572,17 @@ static int jsonEachRowid(sqlite3_vtab_cursor *cur, sqlite_int64 *pRowid){
   *pRowid = (sqlite_int64)p->iRowid;
   return SQLITE_OK;
 }
+
+/* Required to avoid C++ compiler error, e.g.
+**   'error: cannot increment a pointer to incomplete type'
+** From sqlite3.h:6905
+*/
+struct sqlite3_index_constraint {
+  int iColumn;              /* Column constrained.  -1 for ROWID */
+  unsigned char op;         /* Constraint operator */
+  unsigned char usable;     /* True if this constraint is usable */
+  int iTermOffset;          /* Used internally - xBestIndex should ignore */
+};
 
 /* The query strategy is to look for an equality constraint on the json
 ** column.  Without such a constraint, the table cannot operate.  idxNum is
@@ -589,7 +603,7 @@ static int jsonEachBestIndex(
   ** columns in the table */
   UNUSED_PARAM(tab);
   aIdx[0] = aIdx[1] = -1;
-  pConstraint = pIdxInfo->aConstraint;
+  pConstraint = (const struct sqlite3_index_constraint *)pIdxInfo->aConstraint;
   for(i=0; i<pIdxInfo->nConstraint; i++, pConstraint++){
     int iCol;
     int iMask;
@@ -647,7 +661,7 @@ static int jsonEachFilter(
   p->iEnd = (u32) (n / sizeof(float));
   z = (const float*)sqlite3_value_blob(argv[0]);
   if( z==0 ) return SQLITE_OK; // If NUL in, then NUL out.
-  p->zJson = sqlite3_malloc64( n );
+  p->zJson = (float *)sqlite3_malloc64( n );
   if( p->zJson==0 ) return SQLITE_NOMEM;
   memcpy(p->zJson, z, (size_t)n);
   if( (n % sizeof(float)) != 0 ){
@@ -754,6 +768,9 @@ int sqlite3Json1Init(sqlite3 *db){
 
 
 #ifndef SQLITE_CORE
+#ifdef __cplusplus
+extern "C"
+#endif
 #ifdef _WIN32
 __declspec(dllexport)
 #endif

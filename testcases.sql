@@ -1,3 +1,4 @@
+/*
 select a.rowid, a.key, a.value, hex(a.json), ifnull(a.value,'null') as is_null
 FROM float_each(
 x'BA498A41'
@@ -19,7 +20,7 @@ x'BA498A41'
 ) a
 --WHERE a.value IS NULL
 ;
-/*
+
 select b.rowid, b.*, b.json
 FROM float_each(
 x''
@@ -43,7 +44,8 @@ FROM float_each(
 3,4
 ) d
 ;
-select a.rowid, a.key, a.value, hex(a.json)
+*/
+select a.rowid, a.key, a.value, a.json
 FROM float_each(
 x'BA498A41'
 || x'C5208841'
@@ -54,4 +56,3 @@ x'BA498A41'
 ) a
 WHERE key > 2 AND key < 5
 ;
-*/
