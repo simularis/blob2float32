@@ -11,11 +11,15 @@ Save it to the folder next to your database.
 ### Loading the extension
 
 * Instructions for sqlite3 CLI:
-  * ```.load floataway```
+  ```
+  .load floataway
+  ```
 * Instructions for sqlite3 CLI (alternate):
-  * ```SELECT load_extension('./floataway.dll');```
+  ```sql
+  SELECT load_extension('./floataway.dll');
+  ```
 * Instructions for python:
-  * ```python
+  ```python
   import sqlite3
   conn = sqlite3.connect('favoritedb.db')
   conn.enable_load_extension(True)
@@ -37,17 +41,19 @@ a 2d array.
 
 ### json_each usage
 
-```CREATE VIRTUAL TABLE temp.t1 USING float_each(N=1, prefix=col, suffix=, rowname=nrow, fix=);```
+```sql
+CREATE VIRTUAL TABLE temp.t1 USING float_each(N=1, prefix=col, suffix=, rowname=nrow, fix=);
+```
 
 Arguments:
-1. N = number of columns.
-2. prefix and
-3. suffix: e.g.,
+1. **N** = number of columns.
+2. **prefix** and
+3. **suffix**: e.g.,
    * Given (9,col), columns will be named nrow,col1, ..., col9.
    * Given (10,h,_kw), columns will be named nrow,hr01_kw, ..., hr10_kw.
-4. rowname = name to give the leftmost column. This column's value
+4. **rowname** = name to give the leftmost column. This column's value
     will be integers starting at 1.
-5. fix = number of digits to round. Leave blank to skip rounding.
+5. **fix** = number of digits to round. Leave blank to skip rounding.
 
 All arguments are optional but must appear in order,
 with or without argument names. Do not quote strings in the arguments to float_each.
