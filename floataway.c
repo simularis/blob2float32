@@ -43,6 +43,8 @@ SQLITE_EXTENSION_INIT1
 #ifdef __cplusplus
 #include <regex>
 #include <string>
+#include <sstream>
+#include <iomanip>
 #endif
 
 /* Mark a function parameter as unused, to suppress nuisance compiler
@@ -404,7 +406,19 @@ struct JsonEachCursor {
   float *zJson;               /* Input array */
 };
 
-/* Constructor for the json_each virtual table */
+/* Constructor for the json_each virtual table.
+** Usage:
+** CREATE VIRTUAL TABLE temp.t1 USING float_each(
+**   N=1, prefix=col, suffix=, rowname=nrow);
+**
+** Arguments:
+**   N = number of columns.
+**   prefix and suffix: e.g.,
+**     Given (9,col), columns will be named nrow,col1 ... col9.
+**     Given (10,hr,a), columns will be named nrow,hr01a ... hr10a.
+** All arguments are optional but must appear in order,
+** with or without argument names. Do not quote strings.
+*/
 static int jsonEachConnect(
   sqlite3 *db,
   void *pAux,
@@ -415,22 +429,25 @@ static int jsonEachConnect(
   CsvTable *pNew = NULL;        /* The CsvTable object to construct */
   int rc;
 
-/* Column numbers */
-#define JEACH_KEY     0
-#define JEACH_VALUE   1
-/* The xBestIndex method assumes that the JSON and ROOT columns are
-** the last two columns in the table.  Should this ever changes, be
-** sure to update the xBestIndex method. */
-#define JEACH_JSON    2
+/* Column numbers
+** The xBestIndex method assumes that the JSON is the first column.
+** Should this ever changes, be sure to update the xBestIndex method.
+*/
+#define JEACH_JSON    0
+#define JEACH_KEY     1
+#define JEACH_VALUE   2
 
   UNUSED_PARAM(pzErr);
   UNUSED_PARAM(pAux);
 
-  /* Determine the parameter N.
+  int nCol = 1; int nColDigits = 1;
+  std::string zColPrefix("col");
+  std::string zColSuffix("");
+  std::string zRowName("nrow");
+  /* Determine the parameter N = number of columns.
   ** Take the first user argument if it exists, e.g. argv[3].
   ** Otherwise default to N = 1.
   */
-  int nCol = 1;
   if (argc > 3) {
     std::string target(argv[3]);
     // Pattern should match the number in 'N = 123' or simply '123'.
@@ -442,13 +459,61 @@ static int jsonEachConnect(
       int nColFound = std::stoi(match.str(1));
       if (nColFound >= 1) {
         nCol = nColFound;
+      } else {
+        //silently ignore the error
       }
+    } else {
+      //silently ignore the error
     }
   }
+  if (argc > 4) {
+    std::string target(argv[4]);
+    // prefix=col
+    std::regex rx(R"""((?:\s*prefix\s*=)?\s*(\w+)\s*)""");
+    std::smatch match;
+    if (regex_match(target.cbegin(), target.cend(), match, rx)) {
+      // Regex found
+      zColPrefix = match.str(1);
+    } else {
+      //silently ignore the error
+    }
+  }
+  if (argc > 5) {
+    std::string target(argv[5]);
+    // suffix=a
+    std::regex rx(R"""((?:\s*suffix\s*=)?\s*(\w+)\s*)""");
+    std::smatch match;
+    if (regex_match(target.cbegin(), target.cend(), match, rx)) {
+      // Regex found
+      zColSuffix = match.str(1);
+    } else {
+      //silently ignore the error
+    }
+  }
+  if (argc > 6) {
+    std::string target(argv[6]);
+    // rowname=a
+    std::regex rx(R"""((?:\s*rowname\s*=)?\s*(\w+)\s*)""");
+    std::smatch match;
+    if (regex_match(target.cbegin(), target.cend(), match, rx)) {
+      // Regex found
+      zRowName = match.str(1);
+    } else {
+      //silently ignore the error
+    }
+  }
+  nColDigits = 1+(int)log10(nCol); // e.g. 1 -> 1, 9 -> 1, 10 -> 2, 99 -> 2, etc.
+  std::ostringstream schema;
+  schema << "CREATE TABLE x(data HIDDEN";
+  schema << ",\"" << zRowName << "\"";
+  for (int i = 1; i <= nCol; i++) {
+    schema << ",\"" << zColPrefix
+      << std::setw(nColDigits) << std::setfill('0') << i
+      << zColSuffix << "\"";
+  }
+  schema << ")";
 
-  rc = sqlite3_declare_vtab(db, 
-     "CREATE TABLE x(key,value,"
-                    "json HIDDEN)");
+  rc = sqlite3_declare_vtab(db,schema.str().data());
   if( rc==SQLITE_OK ){
     pNew = (CsvTable *)sqlite3_malloc( sizeof(*pNew) );
     *ppVtab = (sqlite3_vtab*)pNew;
@@ -544,22 +609,22 @@ static int jsonEachColumn(
   int i                       /* Which column to return */
 ){
   JsonEachCursor *p = (JsonEachCursor*)cur;
+  CsvTable *pTab = (CsvTable*)cur->pVtab;
   assert(p->iRowid < p->iEnd);
   switch( i ){
-    case JEACH_KEY: {
-      sqlite3_result_int64(ctx, (sqlite3_int64)p->iRowid);
-      break;
-    }
-    case JEACH_VALUE: {
-      sqlite3_result_double(ctx, (double)p->zJson[p->iRowid]);
-      break;
-    }
     case JEACH_JSON: {
-      assert( i==JEACH_JSON );
-      //sqlite3_result_text(ctx, p->sParse.zJson, -1, SQLITE_STATIC);
-      //sqlite3_result_blob(ctx, p->zJson, p->iNbytes, SQLITE_TRANSIENT);
-      CsvTable *pTab = (CsvTable*)cur->pVtab;
-      sqlite3_result_int(ctx, pTab->nCol);
+      sqlite3_result_blob(ctx, p->zJson, p->iNbytes, SQLITE_TRANSIENT);
+      break;
+    }
+    case JEACH_KEY: {
+      sqlite3_result_int64(ctx, (sqlite3_int64)(1 + p->iRowid));
+      break;
+    }
+    default: {
+      int iCol = i - JEACH_VALUE;
+      assert( i >= JEACH_VALUE );
+      assert( i < pTab->nCol );
+      sqlite3_result_double(ctx, (double)p->zJson[pTab->nCol * p->iRowid + iCol]);
       break;
     }
   }
@@ -593,23 +658,24 @@ static int jsonEachBestIndex(
   sqlite3_vtab *tab,
   sqlite3_index_info *pIdxInfo
 ){
+  UNUSED_PARAM(tab);
   int i;                     /* Loop counter or computed array index */
-  int aIdx[2];               /* Index of constraints for JSON and ROOT */
-  int unusableMask = 0;      /* Mask of unusable JSON and ROOT constraints */
-  int idxMask = 0;           /* Mask of usable == constraints JSON and ROOT */
+  int aIdx[2];               /* Index of constraints for JSON and NROW */
+  int unusableMask = 0;      /* Mask of unusable JSON and NROW constraints */
+  int idxMask = 0;           /* Mask of usable == constraints JSON and NROW */
   const struct sqlite3_index_constraint *pConstraint;
 
-  /* This implementation assumes that JSON is the last
+  /* This implementation assumes that JSON is the first
   ** columns in the table */
-  UNUSED_PARAM(tab);
   aIdx[0] = aIdx[1] = -1;
   pConstraint = (const struct sqlite3_index_constraint *)pIdxInfo->aConstraint;
   for(i=0; i<pIdxInfo->nConstraint; i++, pConstraint++){
     int iCol;
     int iMask;
-    if( pConstraint->iColumn < JEACH_JSON ) continue;
-    iCol = pConstraint->iColumn - JEACH_JSON;
-    assert( iCol==0 );
+    if( pConstraint->iColumn < 0 ) continue; // -1 for ROWID
+    if( pConstraint->iColumn > JEACH_JSON ) continue;
+    iCol = pConstraint->iColumn;
+    assert( iCol==0 || iCol==1 );
     testcase( iCol==0 );
     iMask = 1 << iCol;
     if( pConstraint->usable==0 ){
@@ -620,7 +686,7 @@ static int jsonEachBestIndex(
     }
   }
   if( (unusableMask & ~idxMask)!=0 ){
-    /* If there are any unusable constraints on JSON or ROOT, then reject
+    /* If there are any unusable constraints on JSON or NROW, then reject
     ** this entire plan */
     return SQLITE_CONSTRAINT;
   }
@@ -647,32 +713,34 @@ static int jsonEachFilter(
   int idxNum, const char *idxStr,
   int argc, sqlite3_value **argv
 ){
-  JsonEachCursor *p = (JsonEachCursor*)cur;
+  JsonEachCursor *pCur = (JsonEachCursor*)cur;
+  CsvTable *pTab = (CsvTable*)cur->pVtab;
+  int bytesPerRow = pTab->nCol * sizeof(float);
   const float *z;
   const char *zRoot = 0;
   sqlite3_int64 n;
-
   UNUSED_PARAM(idxStr);
-  UNUSED_PARAM(argc);
-  jsonEachCursorReset(p);
+  assert( argc == 1 );
+  jsonEachCursorReset(pCur);
   if( idxNum==0 ) return SQLITE_OK;
+
   n = sqlite3_value_bytes(argv[0]);
-  p->iNbytes = n;
-  p->iEnd = (u32) (n / sizeof(float));
+  pCur->iNbytes = n;
+  pCur->iEnd = (u32) (n / bytesPerRow);
   z = (const float*)sqlite3_value_blob(argv[0]);
   if( z==0 ) return SQLITE_OK; // If NUL in, then NUL out.
-  p->zJson = (float *)sqlite3_malloc64( n );
-  if( p->zJson==0 ) return SQLITE_NOMEM;
-  memcpy(p->zJson, z, (size_t)n);
-  if( (n % sizeof(float)) != 0 ){
+  if( (n % bytesPerRow) != 0 ){
     int rc = SQLITE_NOMEM;
     sqlite3_free(cur->pVtab->zErrMsg);
     cur->pVtab->zErrMsg = sqlite3_mprintf("malformed array data");
     if( cur->pVtab->zErrMsg ) rc = SQLITE_ERROR;
-    jsonEachCursorReset(p);
+    jsonEachCursorReset(pCur);
     return rc;
   }else{
-    p->iRowid = 0;
+    pCur->zJson = (float *)sqlite3_malloc64( n );
+    if( pCur->zJson==0 ) return SQLITE_NOMEM;
+    memcpy(pCur->zJson, z, (size_t)n);
+    pCur->iRowid = 0;
   }
   return SQLITE_OK;
 }
