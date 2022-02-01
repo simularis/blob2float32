@@ -14,6 +14,14 @@ Save it to the folder next to your database.
   * ```.load floataway```
 * Instructions for sqlite3 CLI (alternate):
   * ```SELECT load_extension('./floataway.dll');```
+* Instructions for python:
+  * ```python
+  import sqlite3
+  conn = sqlite3.connect('favoritedb.db')
+  conn.enable_load_extension(True)
+  conn.load_extension('./floataway.dll')
+  conn.enable_load_extension(False)
+  ```
 * Instructions for GUI programs:
   * Use the menu > Tools > Load Extension, then select the DLL file.
 
