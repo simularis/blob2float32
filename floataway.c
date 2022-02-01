@@ -312,7 +312,7 @@ static void jsonWrongNumArgs(
   char *zMsg = sqlite3_mprintf("json_%s() needs an odd number of arguments",
                                zFuncName);
   sqlite3_result_error(pCtx, zMsg, -1);
-  sqlite3_free(zMsg);     
+  sqlite3_free(zMsg);
 }
 
 
@@ -392,8 +392,11 @@ static void float32NullFunc(
 /* An instance of the CSV virtual table */
 typedef struct CsvTable {
   sqlite3_vtab base;              /* Base class.  Must be first */
-  long iStart;                    /* Offset to start of data in zFilename */
   int nCol;                       /* Number of columns in the CSV file */
+  bool bRound;                    /* Whether to round off results to fixed precision */
+  int nRound;                     /* Number of digits fixed precision if rounding */
+  double xRound;                  /* Used for rounding calcs */
+  double yRound;                  /* Used for rounding calcs */
   unsigned int tstFlags;          /* Bit values used for testing */
 } CsvTable;
 
@@ -409,13 +412,16 @@ struct JsonEachCursor {
 /* Constructor for the json_each virtual table.
 ** Usage:
 ** CREATE VIRTUAL TABLE temp.t1 USING float_each(
-**   N=1, prefix=col, suffix=, rowname=nrow);
+**   N=1, prefix=col, suffix=, rowname=nrow, fix=);
 **
 ** Arguments:
 **   N = number of columns.
 **   prefix and suffix: e.g.,
 **     Given (9,col), columns will be named nrow,col1 ... col9.
 **     Given (10,hr,a), columns will be named nrow,hr01a ... hr10a.
+**   rowname = name to give the leftmost column. This column's value
+**     will be integers starting at 1.
+**   fix = number of digits to round. Leave blank to skip rounding.
 ** All arguments are optional but must appear in order,
 ** with or without argument names. Do not quote strings.
 */
@@ -440,10 +446,15 @@ static int jsonEachConnect(
   UNUSED_PARAM(pzErr);
   UNUSED_PARAM(pAux);
 
-  int nCol = 1; int nColDigits = 1;
+  int nCol = 1;
+  int nColDigits = 1;
   std::string zColPrefix("col");
   std::string zColSuffix("");
   std::string zRowName("nrow");
+  bool bRound = false;
+  int nRound = -1;
+  double xRound = 1.0;
+  double yRound = 1.0;
   /* Determine the parameter N = number of columns.
   ** Take the first user argument if it exists, e.g. argv[3].
   ** Otherwise default to N = 1.
@@ -455,11 +466,15 @@ static int jsonEachConnect(
     std::regex rx(R"""((?:\s*N\s*=)?\s*(\d+)\s*)"""); // no double backslashes with raw string literal
     std::smatch match;
     if (regex_match(target.cbegin(), target.cend(), match, rx)) {
-      // Regex found
-      int nColFound = std::stoi(match.str(1));
-      if (nColFound >= 1) {
-        nCol = nColFound;
-      } else {
+      try {
+        // Regex found
+        int nColFound = std::stoi(match.str(1));
+        if (nColFound >= 1) {
+          nCol = nColFound;
+        } else {
+          //silently ignore the error
+        }
+      } catch (std::logic_error& e) {
         //silently ignore the error
       }
     } else {
@@ -502,6 +517,31 @@ static int jsonEachConnect(
       //silently ignore the error
     }
   }
+  if (argc > 7) {
+    std::string target(argv[7]);
+    // fix=4
+    std::regex rx(R"""((?:\s*fix\s*=)?\s*(\d+)\s*)""");
+    std::smatch match;
+    if (regex_match(target.cbegin(), target.cend(), match, rx)) {
+      // Regex found
+      try {
+        int nRndArg = std::stoi(match.str(1));
+        if (nRndArg > 0) {
+          bRound = true;
+          nRound = nRndArg;
+          xRound = pow(10.0, nRound);
+          yRound = 1.0 / xRound;
+        } else {
+          //silently ignore the error
+        }
+      } catch (std::logic_error& e) {
+        //silently ignore the error
+      }
+    } else {
+      //silently ignore the error
+    }
+  }
+
   nColDigits = 1+(int)log10(nCol); // e.g. 1 -> 1, 9 -> 1, 10 -> 2, 99 -> 2, etc.
   std::ostringstream schema;
   schema << "CREATE TABLE x(data HIDDEN";
@@ -522,6 +562,10 @@ static int jsonEachConnect(
     }
     memset(pNew, 0, sizeof(*pNew));
     pNew->nCol = nCol;
+    pNew->bRound = bRound;
+    pNew->nRound = nRound;
+    pNew->xRound = xRound;
+    pNew->yRound = yRound;
     sqlite3_vtab_config(db, SQLITE_VTAB_INNOCUOUS);
   }
   return rc;
@@ -559,15 +603,6 @@ static int jsonEachOpenEach(sqlite3_vtab *p, sqlite3_vtab_cursor **ppCursor){
   memset(pCur, 0, sizeof(*pCur));
   *ppCursor = &pCur->base;
   return SQLITE_OK;
-}
-
-/* constructor for a JsonEachCursor object for json_tree(). */
-static int jsonEachOpenTree(sqlite3_vtab *p, sqlite3_vtab_cursor **ppCursor){
-  int rc = jsonEachOpenEach(p, ppCursor);
-  if( rc==SQLITE_OK ){
-    JsonEachCursor *pCur = (JsonEachCursor*)*ppCursor;
-  }
-  return rc;
 }
 
 /* Reset a JsonEachCursor back to its original state.  Free any memory
@@ -624,7 +659,16 @@ static int jsonEachColumn(
       int iCol = i - JEACH_VALUE;
       assert( i >= JEACH_VALUE );
       assert( i < pTab->nCol );
-      sqlite3_result_double(ctx, (double)p->zJson[pTab->nCol * p->iRowid + iCol]);
+      if (pTab->bRound) {
+        sqlite3_result_double(
+          ctx,
+          pTab->yRound * round(
+            pTab->xRound * (double)p->zJson[pTab->nCol * p->iRowid + iCol]
+          )
+        );
+      } else {
+        sqlite3_result_double(ctx, (double)p->zJson[pTab->nCol * p->iRowid + iCol]);
+      }
       break;
     }
   }
@@ -790,7 +834,7 @@ int sqlite3Json1Init(sqlite3 *db){
      int nArg;
      int flag;
   } aFunc[] = {
-    
+
     { "float32Null",       float32NullFunc,     1, 0                          },
 
 #if SQLITE_DEBUG
@@ -816,7 +860,7 @@ int sqlite3Json1Init(sqlite3 *db){
     { "float_each",            &jsonEachModule              },
   };
 #endif
-  static const int enc = 
+  static const int enc =
        SQLITE_UTF8 |
        SQLITE_DETERMINISTIC |
        SQLITE_INNOCUOUS;
@@ -843,8 +887,8 @@ extern "C"
 __declspec(dllexport)
 #endif
 int sqlite3_floataway_init(
-  sqlite3 *db, 
-  char **pzErrMsg, 
+  sqlite3 *db,
+  char **pzErrMsg,
   const sqlite3_api_routines *pApi
 ){
   SQLITE_EXTENSION_INIT2(pApi);
